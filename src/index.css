@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+  html, body, #root {
+    height: 100%; margin: 0; padding: 0;
+    background-color: #0f1117; color: #f3f4f6;
+    -webkit-user-select: none; user-select: none;
+  }
+  input, select { user-select: text; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2d3347; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #4f8ef7; }
+}
+
+/* Dock chrome copied from OBS' Yami theme (Resources/themes/Yami.obt):
+   window #1D1F26, dock body #272A33, title bar #323540, border #3C404D, 4px radius,
+   transparent separators that outline in white on hover, rubber-band style drop indicator. */
+.xspector-dock {
+  --dv-background-color: #1d1f26;
+  --dv-group-view-background-color: #272a33;
+  --dv-tabs-and-actions-container-background-color: #323540;
+  --dv-activegroup-visiblepanel-tab-background-color: #323540;
+  --dv-activegroup-hiddenpanel-tab-background-color: #323540;
+  --dv-inactivegroup-visiblepanel-tab-background-color: #323540;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #323540;
+  --dv-activegroup-visiblepanel-tab-color: #f3f4f6;
+  --dv-activegroup-hiddenpanel-tab-color: #9ca3af;
+  --dv-inactivegroup-visiblepanel-tab-color: #f3f4f6;
+  --dv-inactivegroup-hiddenpanel-tab-color: #9ca3af;
+  --dv-tab-divider-color: #3c404d;
+  --dv-separator-border: transparent;
+  --dv-sash-color: transparent;
+  --dv-active-sash-color: transparent;
+  --dv-paneview-header-border-color: #3c404d;
+  --dv-paneview-active-outline-color: transparent;
+  --dv-border-radius: 4px;
+  --dv-tab-border-radius: 0px;
+  --dv-spacing-padding: 0px;
+  --dv-tab-margin: 0;
+  --dv-tabs-and-actions-container-height: 28px;
+  --dv-tabs-and-actions-container-font-size: 12px;
+  /* drop indicator = Qt rubber band: translucent blue fill, thin blue outline */
+  --dv-drag-over-background-color: rgba(71, 107, 215, 0.35);
+  --dv-drag-over-border-color: #476bd7;
+  --dv-drag-over-border: 1px solid #476bd7;
+  --dv-dnd-compass-color: #476bd7;
+  --dv-dnd-compass-cell-color: rgba(71, 107, 215, 0.25);
+  --dv-dnd-compass-edge-cell-color: rgba(71, 107, 215, 0.15);
+  --dv-dnd-compass-active-cell-color: rgba(71, 107, 215, 0.5);
+  --dv-edge-dock-indicator-color: #476bd7;
+  height: 100%;
+}
+.xspector-dock, .xspector-dock.dockview-theme-abyss-spaced { padding: 0 !important; background: #1d1f26 !important; }
+.xspector-dock .dv-dockview { padding: 0; }
+.xspector-dock *:focus, .xspector-dock *:focus-visible { outline: none !important; }
+.xspector-dock .dv-groupview { border: 1px solid #3c404d; border-radius: 4px; overflow: hidden; }
+.xspector-dock .dv-groupview .dv-tabs-and-actions-container {
+  height: 28px; padding: 0; border-radius: 4px 4px 0 0; border-bottom: 1px solid #3c404d;
+}
+.xspector-dock .dv-tab { padding: 0; margin: 0; border-radius: 0; border: 0; }
+.xspector-dock .dv-drop-target-anchor,
+.xspector-dock .dv-drop-target-selection { border: 1px solid #476bd7 !important; border-radius: 4px; background: rgba(71, 107, 215, 0.35) !important; }
+/* OBS separators: invisible, but a 1px white outline appears while hovering the seam */
+.xspector-dock .dv-sash:hover, .xspector-dock .dv-sash.dv-sash-active { background: rgba(255, 255, 255, 0.55) !important; border-radius: 1px; }
+
+/* The purple drop outline came from the abyss theme accent (rgb(91,30,207)). Replace it with the
+   OBS blue everywhere, including overlay elements that live outside .xspector-dock. */
+:root, .dockview-theme-abyss-spaced, .xspector-dock.dockview-theme-abyss-spaced, .dv-drop-target-container {
+  --dv-color-abyss-accent: #476bd7;
+  --dv-active-sash-color: #ffffff;
+  --dv-drag-over-background-color: rgba(71, 107, 215, 0.35);
+  --dv-drag-over-border-color: #476bd7;
+  --dv-drag-over-border: 1px solid #476bd7;
+  --dv-border-radius: 4px;
+}
+.dv-drop-target-container .dv-drop-target-anchor,
+.dv-drop-target-anchor,
+.dv-drop-target-selection {
+  border: 1px solid #476bd7 !important;
+  border-radius: 4px !important;
+  background-color: rgba(71, 107, 215, 0.35) !important;
+  outline: none !important;
+}
+
+/* OBS runs with AnimatedDocks off (setDockOptions(0x6)): no transitions on seams or drops. */
+.xspector-dock, .xspector-dock * { --dv-active-sash-transition-duration: 0s; --dv-active-sash-transition-delay: 0s; }
+.xspector-dock .dv-drop-target-anchor { transition: none !important; }
+
+/* Own drop zones (see installDropZones): hide dockview's overlay while ours is showing. */
+html.xs-own-dnd .dv-drop-target-container, html.xs-own-dnd .dv-drop-target-selection { visibility: hidden !important; }
+.xs-drop-indicator {
+  position: fixed; display: none; z-index: 10000; pointer-events: none;
+  border: 1px solid #476bd7; border-radius: 4px; background: rgba(71, 107, 215, 0.35);
+}
+/* Invisible grab area where two separators cross; resizes both at once. */
+.xs-corner-handle { position: absolute; width: 16px; height: 16px; border-radius: 3px; pointer-events: auto; cursor: move; }
+.xs-corner-handle:hover { background: rgba(255, 255, 255, 0.25); }

@@ -1,0 +1,94 @@
+# Builds installers for Windows and macOS, each with its own LGPL FFmpeg.
+# UNTESTED: written locally, never run on GitHub. Run it by hand first (Actions -> Build -> Run workflow).
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "What to build (Windows first: it is the part that has never run)"
+        type: choice
+        options: [windows, macos, all]
+        default: windows
+  push:
+    tags: ["v*"]
+
+jobs:
+  windows:
+    if: github.event_name == 'push' || inputs.platform != 'macos'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: FFmpeg cache
+        id: ffcache
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe
+            licenses/FFmpeg-BUILD_INFO-win64.txt
+          key: ffmpeg-win64-${{ hashFiles('scripts/build-ffmpeg-windows.sh') }}
+
+      - name: MSYS2 (FFmpeg build toolchain)
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            base-devel curl xz
+            mingw-w64-x86_64-toolchain mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-nv-codec-headers mingw-w64-x86_64-amf-headers
+            mingw-w64-x86_64-freetype mingw-w64-x86_64-harfbuzz mingw-w64-x86_64-zlib mingw-w64-x86_64-pkgconf
+
+      - name: Build FFmpeg (LGPL)
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        shell: msys2 {0}
+        run: ./scripts/build-ffmpeg-windows.sh
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+      - run: npx tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xspector-record-windows
+          path: |
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
+
+  macos:
+    if: github.event_name == 'push' || inputs.platform != 'windows'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-latest, arch: arm64 }
+          - { runner: macos-15-intel, arch: x86_64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build tools for FFmpeg's text rendering
+        run: brew install pkgconf meson ninja
+
+      - name: Build FFmpeg (LGPL)
+        run: ./scripts/build-ffmpeg-macos.sh ${{ matrix.arch }}
+
+      - run: npm ci
+      - run: npx tauri build --bundles app,dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xspector-record-macos-${{ matrix.arch }}
+          path: |
+            target/release/bundle/dmg/*.dmg
+            target/release/bundle/macos/*.app
