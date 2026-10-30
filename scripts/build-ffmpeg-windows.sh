@@ -42,7 +42,7 @@ cd "$WORK"
   --enable-decoder=rawvideo,mjpeg,h264,hevc,png,wrapped_avframe \
   --enable-parser=h264,hevc,mjpeg,png \
   --enable-libfreetype --enable-libharfbuzz --pkg-config-flags=--static \
-  --enable-ffnvcodec --enable-nvenc --enable-amf --enable-mediafoundation \
+  --enable-ffnvcodec --enable-nvenc --enable-amf --enable-mediafoundation --disable-d3d11va --disable-dxva2 \
   --enable-encoder=h264_nvenc,hevc_nvenc,h264_amf,hevc_amf,h264_mf,hevc_mf,mjpeg,rawvideo \
   --enable-filter=buffer,buffersink,format,null,nullsink,scale,scale2ref,fps,setpts,split,select,separatefields,bwdif,overlay,colorchannelmixer,movie,testsrc2,drawtext
 make -j"$(nproc)"
