@@ -3,7 +3,7 @@
 #
 # Builds the LGPL FFmpeg for the Windows installer. Run inside an MSYS2 "MINGW64" shell on Windows
 # with: pacman -S --needed base-devel mingw-w64-x86_64-toolchain mingw-w64-x86_64-nasm
-#       mingw-w64-x86_64-nv-codec-headers mingw-w64-x86_64-amf-headers
+#       mingw-w64-x86_64-ffnvcodec-headers mingw-w64-x86_64-amf-headers
 #       mingw-w64-x86_64-freetype mingw-w64-x86_64-harfbuzz mingw-w64-x86_64-zlib mingw-w64-x86_64-pkgconf   (static libs, for drawtext)
 #
 # Output: src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe   (name Tauri's externalBin expects)
