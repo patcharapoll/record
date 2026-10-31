@@ -16,6 +16,14 @@ export function useAppState(autoAssign = false) {
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
+  // Starting a recording briefly has no status (the monitor stops, the recorder is not up yet).
+  // Keep "live" through that gap so the preview keeps its last picture instead of blanking.
+  const [stickyLive, setStickyLive] = useState(false);
+  useEffect(() => {
+    if (status != null) return setStickyLive(true);
+    const t = window.setTimeout(() => setStickyLive(false), 15000);
+    return () => window.clearTimeout(t);
+  }, [status == null]);
   const recording = status?.recording ?? false;
   const now = useNow(recording);
   const free = useDiskFree(settings?.root);
@@ -82,7 +90,7 @@ export function useAppState(autoAssign = false) {
     removeChannel: (i) => update((s) => ({ ...s, channels: s.channels.filter((_, k) => k !== i) })),
     statuses: status?.channels ?? [],
     recording,
-    live: status != null,
+    live: status != null || stickyLive,
     devices,
     encoders,
     refreshDevices: loadDevices,

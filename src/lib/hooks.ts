@@ -107,6 +107,8 @@ export function useLivePreview(canvas: React.RefObject<HTMLCanvasElement | null>
     let received = 0;
     let lagSum = 0;
     let lagMax = 0;
+    let lastPaint = 0;
+    const gaps: number[] = [];
     let statTimer = 0;
     api.debugEnabled().then((on) => {
       if (!on || stop) return;
@@ -114,8 +116,10 @@ export function useLivePreview(canvas: React.RefObject<HTMLCanvasElement | null>
       const t0 = performance.now();
       statTimer = window.setInterval(() => {
         const s = (performance.now() - t0) / 1000;
+        const g = gaps.splice(0).sort((a, b) => a - b);
+        const gapInfo = g.length ? ` gaps p50=${g[g.length >> 1].toFixed(0)} p95=${g[Math.floor(g.length * 0.95)].toFixed(0)} max=${g[g.length - 1].toFixed(0)}ms` : "";
         api.debugLog(
-          `CH${id} preview: received ${received}, painted ${painted} in ${s.toFixed(1)}s => ${(painted / s).toFixed(1)} fps; relay->paint latency avg ${(lagSum / Math.max(1, painted)).toFixed(1)} ms, max ${lagMax} ms`
+          `CH${id} preview:${gapInfo} received ${received}, painted ${painted} in ${s.toFixed(1)}s => ${(painted / s).toFixed(1)} fps; relay->paint latency avg ${(lagSum / Math.max(1, painted)).toFixed(1)} ms, max ${lagMax} ms`
         );
       }, 3000);
     });
@@ -128,6 +132,9 @@ export function useLivePreview(canvas: React.RefObject<HTMLCanvasElement | null>
       const r = renderer.draw(msg);
       if (!r) return;
       painted++;
+      const nowMs = performance.now();
+      if (lastPaint) gaps.push(nowMs - lastPaint);
+      lastPaint = nowMs;
       const lag = Math.max(0, Date.now() - r.sentMs);
       lagSum += lag;
       lagMax = Math.max(lagMax, lag);

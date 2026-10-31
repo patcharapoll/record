@@ -11,6 +11,7 @@
 //! small picture blended onto each frame, the frame rate is exact, and the same frames feed the UI
 //! preview, so the camera is opened only once.
 
+use std::collections::VecDeque;
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -30,9 +31,9 @@ use crate::preview::{self, PreviewHub};
 pub struct MixerStats {
     pub width: AtomicU64,
     pub height: AtomicU64,
-    /// Frames from the camera that were sent on.
+    /// Frames received from the camera.
     pub fresh: AtomicU64,
-    /// Ticks with no new camera frame (the previous one was sent again).
+    /// Output slots with no camera frame (the previous one was sent again).
     pub dup: AtomicU64,
     /// Camera frames replaced before they were sent (camera faster than the output rate).
     pub dropped: AtomicU64,
@@ -278,6 +279,11 @@ pub fn preview_message(body: &[u8], w: usize, h: usize, max_w: usize) -> Vec<u8>
 // The mixer
 // ---------------------------------------------------------------------------------------------
 
+/// Frames the pacer collects before it starts, and the most it keeps queued.
+const PREFILL: usize = 3;
+const MAX_QUEUE: usize = 5;
+const PREFILL_WAIT: Duration = Duration::from_millis(200);
+
 /// Reuses frame buffers. Allocating 1.4 MB per frame costs page faults on every frame (measured:
 /// more than half of this module's CPU); recycled buffers stay mapped.
 struct Pool {
@@ -352,28 +358,79 @@ where
     let (ov_rx, comp) = spawn_compositor(w, h, &p);
     let started = tokio::time::Instant::now();
 
-    // Writer: sends frames to the encoder in order. Decoupled by a small queue so a slow encoder
-    // never stalls the camera read; if the queue is full the newest frame is dropped instead.
+    // Pacer: sends frames to the encoder at an exact rate from a small jitter buffer.
+    //
+    // Frames are queued as they arrive; every output period the oldest one is written. Starting
+    // with a few frames in the queue lets it absorb late or bunched camera frames (the recording
+    // has no need for the lowest latency, the preview is taken before this stage) so jitter does
+    // not turn into a repeated frame followed by a dropped one. Only a real rate difference between
+    // the camera and the output (or a stall) drains or overfills the queue, and then a frame is
+    // repeated or dropped once.
     let pool = Arc::new(Pool { free: Default::default(), len: body_len });
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Arc<Pooled>>(6);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Arc<Pooled>>(8);
+    let period = Duration::from_secs_f64(1.0 / p.fps.max(1) as f64);
+    let pacer_stats = stats.clone();
     let writer = tokio::spawn(async move {
-        while let Some(f) = rx.recv().await {
-            if enc.write_all(b"FRAME\n").await.is_err() || enc.write_all(&f.data).await.is_err() {
+        let stats = pacer_stats;
+        let mut queue: VecDeque<Arc<Pooled>> = VecDeque::new();
+        let mut previous: Option<Arc<Pooled>> = None;
+        // Prefill: wait for the first frames (but never long: a slow camera must still start).
+        match rx.recv().await {
+            Some(f) => queue.push_back(f),
+            None => return,
+        }
+        let _ = tokio::time::timeout(PREFILL_WAIT, async {
+            while queue.len() < PREFILL {
+                match rx.recv().await {
+                    Some(f) => queue.push_back(f),
+                    None => break,
+                }
+            }
+        })
+        .await;
+        let t0 = tokio::time::Instant::now();
+        let mut n: u64 = 0;
+        let mut closed = false;
+        loop {
+            tokio::time::sleep_until(t0 + period.mul_f64(n as f64)).await;
+            loop {
+                match rx.try_recv() {
+                    Ok(f) => queue.push_back(f),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                    Err(_) => {
+                        closed = true;
+                        break;
+                    }
+                }
+            }
+            while queue.len() > MAX_QUEUE {
+                queue.pop_front();
+                stats.dropped.fetch_add(1, Ordering::Relaxed); // camera faster than the output rate
+            }
+            let frame = match queue.pop_front() {
+                Some(f) => {
+                    previous = Some(f.clone());
+                    f
+                }
+                None if closed => return,
+                None => match &previous {
+                    Some(prev) => {
+                        stats.dup.fetch_add(1, Ordering::Relaxed); // nothing arrived: repeat
+                        prev.clone()
+                    }
+                    None => continue,
+                },
+            };
+            if enc.write_all(b"FRAME\n").await.is_err() || enc.write_all(&frame.data).await.is_err() {
                 return; // encoder is gone
             }
+            n += 1;
+            // Falling behind (slow encoder, busy machine) is caught up by writing without waiting:
+            // the output keeps one frame per period so the video length stays equal to wall time.
         }
     });
 
-    // Reader: camera frames in, overlay blended, preview published, output frame rate kept exact.
-    //
-    // Pacing follows the *camera's arrival times* rather than a free-running timer (a timer beats
-    // against the camera clock and produces a repeated and a dropped frame several times a second).
-    // Frame `e` is the output slot a frame belongs to; a gap leaves repeats of the previous frame,
-    // a frame that arrives for a slot already used is dropped. Small jitter changes nothing.
-    let period = 1.0 / p.fps.max(1) as f64;
-    let mut t_first: Option<tokio::time::Instant> = None;
-    let mut next_slot: u64 = 0;
-    let mut previous: Option<Arc<Pooled>> = None;
+    // Reader: camera frames in, preview published, overlay blended.
     let mut line = String::new();
     let result = async {
         loop {
@@ -387,42 +444,20 @@ where
                     return Ok(());
                 }
             }
-            let now = tokio::time::Instant::now();
             stats.last_frame_ms.store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+            stats.fresh.fetch_add(1, Ordering::Relaxed);
 
             if let Some(hub) = p.hub.as_ref().filter(|h| h.viewers(p.channel) > 0) {
                 // the UI draws its own overlay, so the preview is taken before blending
                 hub.publish_frame(p.channel, Arc::new(preview_message(&body, wu, hu, p.preview_max_width as usize)));
             }
 
-            let t0 = *t_first.get_or_insert(now);
-            let slot = ((now - t0).as_secs_f64() / period + 0.5).floor() as u64;
-            if slot < next_slot {
-                stats.dropped.fetch_add(1, Ordering::Relaxed); // camera ahead of the output rate
-                continue;
-            }
             let planes = ov_rx.borrow().clone();
             blend(&mut body, wu, hu, &planes);
             let frame = Arc::new(Pooled { data: body, pool: pool.clone() });
-            if let Some(prev) = &previous {
-                // repeat the last frame for every slot nobody filled
-                for _ in next_slot..slot {
-                    stats.dup.fetch_add(1, Ordering::Relaxed);
-                    if tx.try_send(prev.clone()).is_err() {
-                        break;
-                    }
-                }
+            if tx.try_send(frame).is_err() {
+                stats.dropped.fetch_add(1, Ordering::Relaxed); // the pacer cannot keep up
             }
-            match tx.try_send(frame.clone()) {
-                Ok(()) => {
-                    stats.fresh.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(_) => {
-                    stats.dropped.fetch_add(1, Ordering::Relaxed); // encoder cannot keep up
-                }
-            }
-            previous = Some(frame);
-            next_slot = slot + 1;
         }
     }
     .await;
@@ -539,11 +574,11 @@ mod tests {
         let (header, frames) = tokio::time::timeout(Duration::from_secs(3), reader).await.unwrap().unwrap();
         mixer.await.unwrap().unwrap();
         assert!(header.starts_with("YUV4MPEG2 W16 H16 F25:1"), "{header}");
-        // 5 camera frames over ~0.4 s at 25 fps -> about 9 output frames, repeats included, in order
-        assert!(frames.len() >= 8, "{frames:?}");
+        // 5 camera frames over ~0.4 s at 25 fps -> at least 6 output frames, repeats included, in order
+        assert!(frames.len() >= 6, "{frames:?}");
         assert!(frames.windows(2).all(|w| w[0] <= w[1]));
         assert_eq!(*frames.first().unwrap(), 100);
-        assert!(stats.dup.load(Ordering::Relaxed) >= 3);
+        assert!(stats.dup.load(Ordering::Relaxed) >= 2);
         assert_eq!(stats.fresh.load(Ordering::Relaxed), 5);
     }
 }

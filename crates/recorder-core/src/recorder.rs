@@ -29,6 +29,8 @@ use crate::{Error, Result};
 const STALL_AFTER: Duration = Duration::from_secs(10);
 /// A device that stays silent this long may be hung rather than unplugged: reopen it once.
 const NO_SIGNAL_REOPEN: Duration = Duration::from_secs(300);
+/// A device that never delivered a single frame is more likely a failed open than a missing signal.
+const NEVER_STARTED_REOPEN: Duration = Duration::from_secs(20);
 const MAX_BACKOFF: Duration = Duration::from_secs(15);
 static INSTANCE: AtomicU64 = AtomicU64::new(0);
 
@@ -557,15 +559,20 @@ async fn run_once(
                     // "q" is FFmpeg's graceful quit: it finalizes the open segment. With the live
                     // overlay the capture side is stopped first; the compositor then closes the
                     // encoder's input and the encoder finalizes by itself.
-                    let first = match capture.as_mut() {
-                        Some(c) => c.stdin.take(),
-                        None => stdin.take(),
-                    };
-                    if let Some(mut si) = first {
-                        let _ = si.write_all(b"q").await;
-                    }
-                    if tokio::time::timeout(Duration::from_secs(15), child.wait()).await.is_err() {
+                    if ctx.cfg.preview_only {
+                        // Nothing to finalize: free the camera right away (Start waits for it).
                         let _ = child.kill().await;
+                    } else {
+                        let first = match capture.as_mut() {
+                            Some(c) => c.stdin.take(),
+                            None => stdin.take(),
+                        };
+                        if let Some(mut si) = first {
+                            let _ = si.write_all(b"q").await;
+                        }
+                        if tokio::time::timeout(Duration::from_secs(15), child.wait()).await.is_err() {
+                            let _ = child.kill().await;
+                        }
                     }
                     break "stopped".to_string();
                 }
@@ -591,7 +598,8 @@ async fn run_once(
                         cam_seen = (fresh, Instant::now());
                     }
                     let silent = cam_seen.1.elapsed();
-                    if silent > NO_SIGNAL_REOPEN {
+                    let limit = if cam_seen.0 == 0 { NEVER_STARTED_REOPEN } else { NO_SIGNAL_REOPEN };
+                    if silent > limit {
                         let _ = child.kill().await;
                         break format!("stalled: no camera frames for {}s", silent.as_secs());
                     }
@@ -603,7 +611,8 @@ async fn run_once(
                     });
                 } else {
                     let since = t0.elapsed().saturating_sub(Duration::from_millis(progress_ms.load(Ordering::Relaxed)));
-                    if since > NO_SIGNAL_REOPEN {
+                    let limit = if progress_ms.load(Ordering::Relaxed) == 0 { NEVER_STARTED_REOPEN } else { NO_SIGNAL_REOPEN };
+                    if since > limit {
                         let _ = child.kill().await;
                         break format!("stalled: no frames for {}s", since.as_secs());
                     }

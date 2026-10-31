@@ -103,7 +103,7 @@ async fn main() {
     if let Some(dump) = std::env::var_os("STREAM") {
         // Subscribe to the raw preview like the app does; report rate and dump the first frame.
         let hub = std::sync::Arc::new(recorder_core::preview::PreviewHub::default());
-        let (mut rx, _) = hub.subscribe(1);
+        let (mut rx, _viewer) = hub.subscribe(1);
         cfg.preview_hub = Some(hub);
         watcher = Some(tokio::spawn(async move {
             let (mut n, mut first, t0) = (0u32, true, std::time::Instant::now());
